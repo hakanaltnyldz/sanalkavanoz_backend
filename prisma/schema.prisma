@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VOICE
+  SYSTEM
+}
+
+model User {
+  id           String             @id @default(cuid())
+  email        String             @unique
+  passwordHash String
+  displayName  String
+  avatarUrl    String?
+  lastSeenAt   DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  membership   CoupleMembership?
+  sentMessages Message[]          @relation("MessageSender")
+}
+
+model Couple {
+  id          String             @id @default(cuid())
+  name        String?
+  inviteCode  String             @unique
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  memberships CoupleMembership[]
+  messages    Message[]
+  collectionItems CoupleCollectionItem[]
+  sharedDocuments CoupleSharedDocument[]
+}
+
+model CoupleMembership {
+  id       String   @id @default(cuid())
+  userId   String   @unique
+  coupleId String
+  nickname String?
+  joinedAt DateTime @default(now())
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  couple   Couple   @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, coupleId])
+}
+
+model Message {
+  id                   String      @id @default(cuid())
+  coupleId             String
+  senderId             String
+  clientMessageId      String?     @unique
+  type                 MessageType @default(TEXT)
+  text                 String?
+  mediaUrl             String?
+  mediaMimeType        String?
+  voiceDurationSeconds Int?
+  replyToMessageId     String?
+  deliveredAt          DateTime?
+  readAt               DateTime?
+  deletedAt            DateTime?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  couple               Couple      @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+  sender               User        @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  replyToMessage       Message?    @relation("MessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies              Message[]   @relation("MessageReplies")
+
+  @@index([coupleId, createdAt])
+  @@index([senderId, createdAt])
+}
+
+model CoupleCollectionItem {
+  id             String   @id @default(cuid())
+  coupleId       String
+  collectionName String
+  itemKey        String
+  data           Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  couple         Couple   @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+
+  @@unique([coupleId, collectionName, itemKey])
+  @@index([coupleId, collectionName, updatedAt])
+}
+
+model CoupleSharedDocument {
+  id          String   @id @default(cuid())
+  coupleId    String
+  documentKey String
+  data        Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  couple      Couple   @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+
+  @@unique([coupleId, documentKey])
+  @@index([coupleId, updatedAt])
+}
