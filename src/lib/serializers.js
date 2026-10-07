@@ -2,6 +2,7 @@ export function serializeUser(user, presenceStore = null) {
   return {
     id: user.id,
     email: user.email,
+    username: user.username ?? null,
     displayName: user.displayName,
     avatarUrl: user.avatarUrl ?? null,
     lastSeenAt: user.lastSeenAt ? user.lastSeenAt.toISOString() : null,
@@ -9,6 +10,16 @@ export function serializeUser(user, presenceStore = null) {
     isTyping: presenceStore ? presenceStore.isTyping(user.id) : false,
     createdAt: user.createdAt ? user.createdAt.toISOString() : null,
     updatedAt: user.updatedAt ? user.updatedAt.toISOString() : null,
+  };
+}
+
+// Baskalarina gosterilen profil: e-posta gibi ozel alanlar yok.
+export function serializePublicUser(user) {
+  return {
+    id: user.id,
+    username: user.username ?? null,
+    displayName: user.displayName,
+    avatarUrl: user.avatarUrl ?? null,
   };
 }
 
@@ -29,6 +40,7 @@ export function serializeCouple(membership, presenceStore = null) {
     id: membership.couple.id,
     name: membership.couple.name ?? null,
     inviteCode: membership.couple.inviteCode,
+    startDate: membership.couple.startDate ? membership.couple.startDate.toISOString() : null,
     createdAt: membership.couple.createdAt.toISOString(),
     updatedAt: membership.couple.updatedAt.toISOString(),
     partner: partner
@@ -39,6 +51,17 @@ export function serializeCouple(membership, presenceStore = null) {
         }
       : null,
     members,
+  };
+}
+
+export function serializePartnerRequest(request) {
+  return {
+    id: request.id,
+    status: request.status,
+    createdAt: request.createdAt.toISOString(),
+    respondedAt: request.respondedAt ? request.respondedAt.toISOString() : null,
+    fromUser: request.fromUser ? serializePublicUser(request.fromUser) : null,
+    toUser: request.toUser ? serializePublicUser(request.toUser) : null,
   };
 }
 
@@ -62,7 +85,7 @@ export function serializeMessage(message) {
     sender: message.sender
       ? {
           id: message.sender.id,
-          email: message.sender.email,
+          username: message.sender.username ?? null,
           displayName: message.sender.displayName,
           avatarUrl: message.sender.avatarUrl ?? null,
         }
@@ -78,4 +101,3 @@ export function serializeMessage(message) {
       : null,
   };
 }
-

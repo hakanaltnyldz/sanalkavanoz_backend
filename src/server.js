@@ -20,6 +20,13 @@ const io = new Server(httpServer, {
     origin: env.corsOrigins,
     credentials: true,
   },
+  // Mobil aglarda kopmalari daha hizli fark et.
+  pingInterval: 20_000,
+  pingTimeout: 20_000,
+  // Kisa kopmalarda (tunel, asansor) odalari ve kacirilan olaylari geri getir.
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000,
+  },
 });
 
 app.set("io", io);
@@ -38,6 +45,11 @@ async function shutdown(signal) {
     process.exit(0);
   });
 }
+
+// Beklenmeyen bir hata sureci dusurmesin; logla ve calismaya devam et.
+process.on("unhandledRejection", (reason) => {
+  console.error("Yakalanmamis promise hatasi:", reason);
+});
 
 process.on("SIGINT", () => {
   shutdown("SIGINT");

@@ -5,7 +5,7 @@ const messageInclude = {
   sender: {
     select: {
       id: true,
-      email: true,
+      username: true,
       displayName: true,
       avatarUrl: true,
     },

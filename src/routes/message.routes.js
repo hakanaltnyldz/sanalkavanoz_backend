@@ -7,7 +7,7 @@ import {
   markMessagesRead,
   messageInclude,
 } from "../lib/messages.js";
-import { getPartnerMember, requireMembership } from "../lib/couple.js";
+import { requireCoupleId } from "../lib/couple.js";
 import { AppError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 import { serializeMessage } from "../lib/serializers.js";
@@ -19,6 +19,7 @@ import {
 } from "../socket/socket.js";
 import { presenceStore } from "../socket/presence-store.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { pushForNewMessage } from "../lib/push-events.js";
 
 const router = Router();
 
@@ -63,15 +64,15 @@ router.use(requireAuth);
 
 router.get("/", async (req, res) => {
   const query = listSchema.parse(req.query);
-  const membership = await requireMembership(req.user.id);
+  const coupleId = await requireCoupleId(req.user.id);
   const io = req.app.get("io");
 
-  const deliveries = await markMessagesDelivered(membership.coupleId, req.user.id);
-  emitDeliveryUpdate(io, membership.coupleId, deliveries);
+  const deliveries = await markMessagesDelivered(coupleId, req.user.id);
+  emitDeliveryUpdate(io, coupleId, deliveries);
 
   const messages = await prisma.message.findMany({
     where: {
-      coupleId: membership.coupleId,
+      coupleId,
       deletedAt: null,
       ...(query.before
         ? {
@@ -106,22 +107,25 @@ router.get("/", async (req, res) => {
 
 router.post("/", async (req, res) => {
   const input = createMessageSchema.parse(req.body);
-  const membership = await requireMembership(req.user.id);
-  const partner = getPartnerMember(membership);
+  const coupleId = await requireCoupleId(req.user.id);
   const io = req.app.get("io");
-  const shouldMarkDelivered = partner ? presenceStore.isOnline(partner.userId) : false;
+  const shouldMarkDelivered = presenceStore.isAnyOtherMemberOnline(coupleId, req.user.id);
 
   const result = await createMessageForCouple({
-    coupleId: membership.coupleId,
+    coupleId,
     senderId: req.user.id,
     input,
     markDelivered: shouldMarkDelivered,
   });
 
-  emitNewMessage(io, membership.coupleId, result.message);
+  emitNewMessage(io, coupleId, result.message);
+
+  if (result.createdNew) {
+    pushForNewMessage(coupleId, req.user, result.message);
+  }
 
   if (result.message.deliveredAt) {
-    emitDeliveryUpdate(io, membership.coupleId, [
+    emitDeliveryUpdate(io, coupleId, [
       {
         id: result.message.id,
         deliveredAt: result.message.deliveredAt,
@@ -137,16 +141,16 @@ router.post("/", async (req, res) => {
 
 router.post("/read-all", async (req, res) => {
   const input = readManySchema.parse(req.body);
-  const membership = await requireMembership(req.user.id);
+  const coupleId = await requireCoupleId(req.user.id);
   const io = req.app.get("io");
 
   const receipts = await markMessagesRead({
-    coupleId: membership.coupleId,
+    coupleId,
     userId: req.user.id,
     upToMessageId: input.upToMessageId ?? null,
   });
 
-  emitReadUpdate(io, membership.coupleId, receipts);
+  emitReadUpdate(io, coupleId, receipts);
 
   return res.json({
     updatedCount: receipts.length,
@@ -165,16 +169,16 @@ router.post("/:messageId/read", async (req, res) => {
     throw new AppError(400, "messageId zorunlu.");
   }
 
-  const membership = await requireMembership(req.user.id);
+  const coupleId = await requireCoupleId(req.user.id);
   const io = req.app.get("io");
 
   const receipts = await markMessagesRead({
-    coupleId: membership.coupleId,
+    coupleId,
     userId: req.user.id,
     upToMessageId: messageId,
   });
 
-  emitReadUpdate(io, membership.coupleId, receipts);
+  emitReadUpdate(io, coupleId, receipts);
 
   return res.json({
     updatedCount: receipts.length,
@@ -188,15 +192,15 @@ router.delete("/:messageId", async (req, res) => {
     throw new AppError(400, "messageId zorunlu.");
   }
 
-  const membership = await requireMembership(req.user.id);
+  const coupleId = await requireCoupleId(req.user.id);
   const io = req.app.get("io");
   const result = await deleteMessageForCouple({
-    coupleId: membership.coupleId,
+    coupleId,
     userId: req.user.id,
     messageId,
   });
 
-  emitDeletedMessage(io, membership.coupleId, result.id, result.deletedAt);
+  emitDeletedMessage(io, coupleId, result.id, result.deletedAt);
 
   return res.status(204).send();
 });

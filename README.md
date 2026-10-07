@@ -1,240 +1,79 @@
 # Sanal Kavanoz Backend
 
-Bu servis, Flutter uygulamasindaki en kritik eksigi kapatmak icin yazildi:
+Sanal Kavanoz uygulamasının tek veri kaynağı: hesaplar, partner eşleşmesi, mesajlaşma, ortak veriler ve medya.
+Firebase kullanılmıyor.
 
-- gercek auth
-- cift odasi mantigi
-- tek bir mesajlasma kaynagi
-- delivered/read receipt
-- typing + last seen + online presence
-- bucket list, galeri, takvim, story, mektup, playlist, yerler ve diger ortak moduller icin generic couple-data katmani
-- Socket.IO ile gercek zamanli event akisi
+**Teknoloji:** Node.js 22, Express 5, Socket.IO, Prisma, PostgreSQL (Neon), Render.
 
-## Cozulen Ana Sorunlar
+## Akış
 
-- Flutter tarafindaki iki ayri sohbet akisini tek backend sozlesmesine indirir.
-- `okundu`, `iletildi`, `son gorulme`, `yaziyor` gibi durumlari veri modeli haline getirir.
-- istemciye hardcode kullanici/parola gommeden iki hesap akisini server tarafina tasir.
-- daginik local sync yerine tek mesaj kaynagi saglar.
+1. Kullanıcı **kullanıcı adı + e-posta + şifre** ile kayıt olur. Giriş e-posta ya da kullanıcı adıyla yapılır.
+2. Partnerini kullanıcı adıyla arar ve **eşleşme isteği** gönderir.
+3. Karşı taraf kabul edince (ya da ikisi birbirine istek atınca) çift odası oluşur. İki tarafın soketi de anında odaya alınır, yeniden giriş gerekmez.
+4. Mesajlar, anılar, listeler ve "yazıyor / çevrimiçi" durumu Socket.IO üzerinden canlı akar.
 
-## Teknoloji Secimi
-
-- Node.js 22
-- Express 5
-- Socket.IO
-- Prisma
-- PostgreSQL
-
-Bu kombinasyon Flutter tarafinda kolay kullanilir, Render gibi servislerde tek web service olarak ayaga kalkar ve Neon Postgres ile bedava prototip kurulumuna uygundur.
-
-## Klasor Yapisi
-
-```txt
-sanalkavanoz_bakcned/
-  prisma/
-  src/
-  .env.example
-  package.json
-  render.yaml
-```
-
-## Veri Modeli
-
-### User
-
-- `email`
-- `passwordHash`
-- `displayName`
-- `avatarUrl`
-- `lastSeenAt`
-
-### Couple
-
-- `name`
-- `inviteCode`
-
-### CoupleMembership
-
-- bir kullanici sadece bir cift odasina baglanabilir
-
-### Message
-
-- `type`: `TEXT | IMAGE | VOICE | SYSTEM`
-- `text`
-- `mediaUrl`
-- `mediaMimeType`
-- `voiceDurationSeconds`
-- `deliveredAt`
-- `readAt`
-- `replyToMessageId`
-- `clientMessageId`
-
-### CoupleCollectionItem
-
-- `collectionName`
-- `itemKey`
-- `data` (JSON)
-
-### CoupleSharedDocument
-
-- `documentKey`
-- `data` (JSON)
+Eski hesaplarda kullanıcı adı boş olabilir; uygulama ilk girişte kullanıcı adı seçtirir.
 
 ## REST API
 
-### Auth
+| Uç | Açıklama |
+| --- | --- |
+| `POST /api/auth/register` | `{ username, email, password, displayName }` |
+| `POST /api/auth/login` | `{ identifier, password }`. `identifier` e-posta ya da kullanıcı adı |
+| `GET /api/auth/me` | Oturum + çift bilgisi |
+| `PATCH /api/auth/me` | `{ displayName?, username?, avatarUrl? }` |
+| `POST /api/auth/change-password` | `{ currentPassword, newPassword }` |
+| `GET /api/auth/username-available?username=` | Kullanıcı adı müsait mi |
+| `GET /api/users/search?q=` | Kullanıcı adına göre arama (e-posta dönmez) |
+| `GET /api/partner-requests` | `{ incoming, outgoing }` bekleyen istekler |
+| `POST /api/partner-requests` | `{ username }`. Karşılıklı istekte anında eşleşir |
+| `POST /api/partner-requests/:id/accept` · `/decline` | İsteği yanıtla |
+| `DELETE /api/partner-requests/:id` | Gönderilen isteği geri al |
+| `GET /api/couples/me` · `PATCH /api/couples/me` | Çift bilgisi, `{ startDate?, name? }` |
+| `POST /api/couples/leave` | Eşleşmeyi bitir; odada kimse kalmazsa ortak veri silinir |
+| `GET/POST /api/messages`, `POST /api/messages/read-all`, `DELETE /api/messages/:id` | Mesajlaşma |
+| `/api/data/collections/:name[/:id]`, `/api/data/documents/:key` | Ortak koleksiyon / belge |
+| `POST /api/media` | Ham dosya gövdesi + `Content-Type` (görsel/ses, en fazla 8 MB). `{ url }` döner |
+| `GET /api/media/:id` | Dosyayı döndürür (id 128 bit rastgele) |
+| `GET /api/presence/current` | İlk açılış için anlık çevrimiçi durumu |
 
-- `POST /api/auth/register`
-- `POST /api/auth/login`
-- `GET /api/auth/me`
+## Socket olayları
 
-### Couple
+Bağlantı: `auth: { token }`. Eşleşmemiş kullanıcılar da bağlanır.
 
-- `GET /api/couples/me`
-- `POST /api/couples/create`
-- `POST /api/couples/join`
+- **İstemci → sunucu:** `presence:heartbeat`, `typing:update { isTyping }`
+- **Sunucu → istemci:** `message:new`, `message:deleted`, `messages:delivered`, `messages:read`,
+  `presence:update`, `typing:update`, `data:collection-upsert|delete`, `data:document-update|delete`,
+  `partner-request:new`, `partner-request:updated`, `couple:updated`
 
-### Messages
-
-- `GET /api/messages?limit=40&before=2026-04-15T12:00:00.000Z`
-- `POST /api/messages`
-- `POST /api/messages/read-all`
-- `POST /api/messages/:messageId/read`
-
-### Presence
-
-- `GET /api/presence/current`
-- `POST /api/presence/heartbeat`
-
-### Generic Couple Data
-
-- `GET /api/data/collections/:collectionName`
-- `POST /api/data/collections/:collectionName`
-- `PUT /api/data/collections/:collectionName/:itemId`
-- `PATCH /api/data/collections/:collectionName/:itemId`
-- `DELETE /api/data/collections/:collectionName/:itemId`
-- `GET /api/data/documents/:documentKey`
-- `PUT /api/data/documents/:documentKey`
-- `PATCH /api/data/documents/:documentKey`
-- `DELETE /api/data/documents/:documentKey`
-
-## Socket Eventleri
-
-### Client -> Server
-
-- `presence:heartbeat`
-- `typing:update` payload: `{ "isTyping": true }`
-
-### Server -> Client
-
-- `presence:update`
-- `message:new`
-- `messages:delivered`
-- `messages:read`
-- `data:collection-upsert`
-- `data:collection-delete`
-- `data:document-update`
-- `data:document-delete`
-
-## Lokal Kurulum
-
-1. Klasore gir:
+## Kurulum
 
 ```powershell
-cd C:\Users\PC\Desktop\zeyno\sanalkavanoz_bakcned
-```
-
-2. Ornek env dosyasini kopyala:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-3. Paketleri kur:
-
-```powershell
+Copy-Item .env.example .env   # DATABASE_URL ve JWT_SECRET'i doldur
 npm.cmd install
-```
-
-4. Prisma client uret:
-
-```powershell
 npm.cmd run prisma:generate
-```
-
-5. Veritabani semasini uygula:
-
-```powershell
 npm.cmd run prisma:push
-```
-
-6. Demo hesaplari istersen `.env` icinde doldur ve calistir:
-
-```powershell
-npm.cmd run prisma:seed
-```
-
-7. Servisi baslat:
-
-```powershell
 npm.cmd run dev
 ```
 
-## Ornek Auth Akisi
+## Test
 
-### Kayit
+Gerçek veritabanı gerekmez; bellek içi PGlite ile uçtan uca test çalışır:
 
-```json
-POST /api/auth/register
-{
-  "email": "hakan@example.com",
-  "password": "ChangeMe123!",
-  "displayName": "Hakan"
-}
+```powershell
+npm.cmd test
 ```
 
-### Giris
+## Push bildirimleri
 
-```json
-POST /api/auth/login
-{
-  "email": "hakan@example.com",
-  "password": "ChangeMe123!"
-}
-```
+Uygulama kapalıyken mesaj, sarılma, "seni düşünüyorum", eşleşme isteği, yeni anı ve sürpriz bildirimleri
+Firebase Cloud Messaging ile gönderilir. Firebase sadece bildirim taşır; hesaplar ve veriler bu sunucudadır.
 
-## Ornek Mesaj Gonderimi
+- Uygulama giriş yapınca cihazını `POST /api/devices { token, platform }` ile kaydeder, çıkışta `POST /api/devices/unregister` ile siler.
+- Partner o an çevrimiçiyse (soket açıksa) push gönderilmez; bildirim soketten gelir.
+- Sunucu tarafında `FIREBASE_SERVICE_ACCOUNT` ortam değişkenine Firebase servis hesabı JSON'u (tek satır ya da base64) verilmelidir. Boşsa push kapalıdır, geri kalan her şey çalışır.
 
-```json
-POST /api/messages
-Authorization: Bearer <token>
-{
-  "clientMessageId": "flutter-local-1744720000",
-  "type": "TEXT",
-  "text": "Seni seviyorum"
-}
-```
+## Deploy (Render)
 
-## Flutter Tarafi Entegrasyon Sirasi
-
-1. Firebase auth yerine bu backendin `/api/auth/login` ve `/api/auth/register` endpointlerini kullan.
-2. `notes` ve `chat` ekranlarini tek `messages` kaynagina dusur.
-3. `markAllAsRead()` yerine `/api/messages/read-all` cagir.
-4. `typing_status`, `lastSeen`, `online` gibi Firestore anahtarlarini Socket.IO eventlerine tasi.
-5. `isRead`, `isDelivered`, `readAt` alanlarini backend cevabindan guncelle.
-
-## Ucretsiz Deploy Onerisi
-
-- Web service: Render
-- PostgreSQL: Neon
-
-Render uzerine deploy icin `render.yaml` eklendi. Veritabani olarak Neon URL'sini `DATABASE_URL` degiskenine vermen yeterli.
-
-## Bilincli Olarak Disarida Birakilanlar
-
-- medya dosyasini sunucuya lokal disk ile yukleme
-- push notification
-- refresh token sistemi
-- yonetim paneli
-
-Bunlar ikinci asamada eklenmeli. Ozellikle foto/ses icin object storage veya Cloudinary benzeri bir katman gerekir.
+`render.yaml` hazır. Başlangıçta `prisma db push` çalışır. Yeni alanlar (kullanıcı adı, eşleşme istekleri, medya)
+mevcut veriyi silmeden eklenir. Render ortamında `DATABASE_URL` ve `JWT_SECRET` tanımlı olmalı.

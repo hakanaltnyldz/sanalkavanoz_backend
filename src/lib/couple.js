@@ -1,16 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { AppError } from "./errors.js";
 import { prisma } from "./prisma.js";
-
-const publicUserSelect = {
-  id: true,
-  email: true,
-  displayName: true,
-  avatarUrl: true,
-  lastSeenAt: true,
-  createdAt: true,
-  updatedAt: true,
-};
+import { publicUserSelect } from "./users.js";
 
 export const membershipInclude = {
   couple: {
@@ -30,7 +21,7 @@ export const membershipInclude = {
 };
 
 export function generateInviteCode() {
-  return randomBytes(4).toString("hex").toUpperCase();
+  return randomBytes(6).toString("hex").toUpperCase();
 }
 
 export async function loadMembershipForUser(userId) {
@@ -44,13 +35,26 @@ export async function requireMembership(userId) {
   const membership = await loadMembershipForUser(userId);
 
   if (!membership) {
-    throw new AppError(409, "Bu kullanici henuz bir cift odasina bagli degil.");
+    throw new AppError(409, "Henuz bir partnerle eslesmedin.");
   }
 
   return membership;
 }
 
+// Sadece coupleId gereken rotalar icin hafif sorgu (uye listesi ve kullanicilari cekmez).
+export async function requireCoupleId(userId) {
+  const membership = await prisma.coupleMembership.findUnique({
+    where: { userId },
+    select: { coupleId: true },
+  });
+
+  if (!membership) {
+    throw new AppError(409, "Henuz bir partnerle eslesmedin.");
+  }
+
+  return membership.coupleId;
+}
+
 export function getPartnerMember(membership) {
   return membership.couple.memberships.find((item) => item.userId !== membership.userId) ?? null;
 }
-

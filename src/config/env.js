@@ -16,7 +16,10 @@ export const env = {
   port: Number(process.env.PORT ?? 3000),
   databaseUrl: process.env.DATABASE_URL ?? "",
   jwtSecret: process.env.JWT_SECRET ?? "dev-only-secret-change-me",
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "60d",
   corsOrigins: parseCorsOrigins(process.env.CORS_ORIGIN ?? "*"),
+  // Medya linkleri icin; bos ise istegin host'undan uretilir.
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL ?? "").replace(/\/+$/, ""),
+  // Push bildirimleri icin Firebase servis hesabi (JSON ya da base64 JSON).
+  firebaseServiceAccount: process.env.FIREBASE_SERVICE_ACCOUNT ?? "",
 };
-

@@ -1,20 +1,17 @@
 import { Router } from "express";
 import { z } from "zod";
-import { generateInviteCode, loadMembershipForUser } from "../lib/couple.js";
-import { AppError } from "../lib/errors.js";
+import { loadMembershipForUser, requireMembership } from "../lib/couple.js";
 import { prisma } from "../lib/prisma.js";
 import { serializeCouple } from "../lib/serializers.js";
 import { presenceStore } from "../socket/presence-store.js";
+import { detachUserFromCouple, emitPresenceUpdate, emitToUser } from "../socket/socket.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 const router = Router();
 
-const createSchema = z.object({
-  name: z.string().trim().min(2).max(80).optional().nullable(),
-});
-
-const joinSchema = z.object({
-  inviteCode: z.string().trim().min(6).max(32),
+const updateSchema = z.object({
+  name: z.string().trim().max(80).nullable().optional(),
+  startDate: z.string().datetime({ offset: true }).nullable().optional(),
 });
 
 router.use(requireAuth);
@@ -27,90 +24,59 @@ router.get("/me", async (req, res) => {
   });
 });
 
-router.post("/create", async (req, res) => {
-  const input = createSchema.parse(req.body);
-  const existingMembership = await loadMembershipForUser(req.user.id);
+// Iliski baslangic tarihi ve cift adi gibi ortak ayarlar.
+router.patch("/me", async (req, res) => {
+  const input = updateSchema.parse(req.body);
+  const membership = await requireMembership(req.user.id);
+  const data = {};
 
-  if (existingMembership) {
-    throw new AppError(409, "Bu kullanici zaten bir cift odasina bagli.");
+  if (input.name !== undefined) {
+    data.name = input.name || null;
   }
 
-  let inviteCode = generateInviteCode();
-
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const conflict = await prisma.couple.findUnique({
-      where: {
-        inviteCode,
-      },
-      select: {
-        id: true,
-      },
-    });
-
-    if (!conflict) {
-      break;
-    }
-
-    inviteCode = generateInviteCode();
+  if (input.startDate !== undefined) {
+    data.startDate = input.startDate ? new Date(input.startDate) : null;
   }
 
-  await prisma.couple.create({
-    data: {
-      name: input.name ?? null,
-      inviteCode,
-      memberships: {
-        create: {
-          userId: req.user.id,
-        },
-      },
-    },
+  await prisma.couple.update({
+    where: { id: membership.coupleId },
+    data,
   });
 
-  const membership = await loadMembershipForUser(req.user.id);
+  const io = req.app.get("io");
+  for (const member of membership.couple.memberships) {
+    emitToUser(io, member.userId, "couple:updated", { coupleId: membership.coupleId });
+  }
 
-  return res.status(201).json({
-    couple: serializeCouple(membership, presenceStore),
+  return res.json({
+    couple: serializeCouple(await loadMembershipForUser(req.user.id), presenceStore),
   });
 });
 
-router.post("/join", async (req, res) => {
-  const input = joinSchema.parse(req.body);
-  const existingMembership = await loadMembershipForUser(req.user.id);
+// Eslesmeyi bozar. Odada kimse kalmazsa ortak veriler de silinir.
+router.post("/leave", async (req, res) => {
+  const membership = await requireMembership(req.user.id);
+  const coupleId = membership.coupleId;
+  const io = req.app.get("io");
 
-  if (existingMembership) {
-    throw new AppError(409, "Bu kullanici zaten bir cift odasina bagli.");
-  }
+  await prisma.$transaction(async (tx) => {
+    await tx.coupleMembership.delete({ where: { userId: req.user.id } });
+    const remaining = await tx.coupleMembership.count({ where: { coupleId } });
 
-  const couple = await prisma.couple.findUnique({
-    where: {
-      inviteCode: input.inviteCode.toUpperCase(),
-    },
-    include: {
-      memberships: true,
-    },
+    if (remaining === 0) {
+      await tx.couple.delete({ where: { id: coupleId } });
+    }
   });
 
-  if (!couple) {
-    throw new AppError(404, "Davet kodu bulunamadi.");
+  await detachUserFromCouple(io, req.user.id, coupleId);
+
+  for (const member of membership.couple.memberships) {
+    emitToUser(io, member.userId, "couple:updated", { coupleId: null });
   }
 
-  if (couple.memberships.length >= 2) {
-    throw new AppError(409, "Bu cift odasi zaten dolu.");
-  }
+  await emitPresenceUpdate(io, coupleId);
 
-  await prisma.coupleMembership.create({
-    data: {
-      coupleId: couple.id,
-      userId: req.user.id,
-    },
-  });
-
-  const membership = await loadMembershipForUser(req.user.id);
-
-  return res.json({
-    couple: serializeCouple(membership, presenceStore),
-  });
+  return res.json({ couple: null });
 });
 
 export default router;
-

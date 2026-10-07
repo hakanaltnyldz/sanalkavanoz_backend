@@ -14,29 +14,44 @@ enum MessageType {
   SYSTEM
 }
 
+enum PartnerRequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
 model User {
-  id           String             @id @default(cuid())
-  email        String             @unique
-  passwordHash String
-  displayName  String
-  avatarUrl    String?
-  lastSeenAt   DateTime?
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
-  membership   CoupleMembership?
-  sentMessages Message[]          @relation("MessageSender")
+  id                      String             @id @default(cuid())
+  email                   String             @unique
+  // Eski hesaplarda bos olabilir; uygulama ilk giriste kullanici adi sectirir.
+  username                String?            @unique
+  passwordHash            String
+  displayName             String
+  avatarUrl               String?
+  lastSeenAt              DateTime?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+  membership              CoupleMembership?
+  sentMessages            Message[]          @relation("MessageSender")
+  sentPartnerRequests     PartnerRequest[]   @relation("PartnerRequestSender")
+  receivedPartnerRequests PartnerRequest[]   @relation("PartnerRequestReceiver")
+  uploads                 MediaFile[]
+  devices                 DeviceToken[]
 }
 
 model Couple {
-  id          String             @id @default(cuid())
-  name        String?
-  inviteCode  String             @unique
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
-  memberships CoupleMembership[]
-  messages    Message[]
+  id              String                 @id @default(cuid())
+  name            String?
+  inviteCode      String                 @unique
+  startDate       DateTime?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  memberships     CoupleMembership[]
+  messages        Message[]
   collectionItems CoupleCollectionItem[]
   sharedDocuments CoupleSharedDocument[]
+  mediaFiles      MediaFile[]
 }
 
 model CoupleMembership {
@@ -49,6 +64,22 @@ model CoupleMembership {
   couple   Couple   @relation(fields: [coupleId], references: [id], onDelete: Cascade)
 
   @@unique([userId, coupleId])
+  @@index([coupleId])
+}
+
+model PartnerRequest {
+  id          String               @id @default(cuid())
+  fromUserId  String
+  toUserId    String
+  status      PartnerRequestStatus @default(PENDING)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  respondedAt DateTime?
+  fromUser    User                 @relation("PartnerRequestSender", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser      User                 @relation("PartnerRequestReceiver", fields: [toUserId], references: [id], onDelete: Cascade)
+
+  @@index([toUserId, status])
+  @@index([fromUserId, status])
 }
 
 model Message {
@@ -101,4 +132,34 @@ model CoupleSharedDocument {
 
   @@unique([coupleId, documentKey])
   @@index([coupleId, updatedAt])
+}
+
+// Foto ve ses dosyalari. Id tahmin edilemez rastgele bir anahtardir,
+// boylece dosyalar Image.network gibi header gonderemeyen istemcilerden okunabilir.
+model MediaFile {
+  id         String   @id
+  coupleId   String?
+  uploaderId String
+  mimeType   String
+  size       Int
+  data       Bytes
+  createdAt  DateTime @default(now())
+  couple     Couple?  @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+  uploader   User     @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+
+  @@index([coupleId, createdAt])
+  @@index([uploaderId])
+}
+
+// Push bildirimi icin cihaz kayitlari (Firebase Cloud Messaging token'lari).
+model DeviceToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  platform  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

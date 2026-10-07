@@ -1,22 +1,16 @@
 import { prisma } from "../lib/prisma.js";
 import { verifyAccessToken } from "../lib/auth.js";
-import { loadMembershipForUser } from "../lib/couple.js";
 import { markMessagesDelivered } from "../lib/messages.js";
 import { serializeMessage, serializeUser } from "../lib/serializers.js";
+import { publicUserSelect } from "../lib/users.js";
 import { presenceStore } from "./presence-store.js";
 
-const socketUserSelect = {
-  id: true,
-  email: true,
-  displayName: true,
-  avatarUrl: true,
-  lastSeenAt: true,
-  createdAt: true,
-  updatedAt: true,
-};
-
-function roomName(coupleId) {
+export function coupleRoom(coupleId) {
   return `couple:${coupleId}`;
+}
+
+export function userRoom(userId) {
+  return `user:${userId}`;
 }
 
 function extractToken(socket) {
@@ -35,21 +29,35 @@ function extractToken(socket) {
   return null;
 }
 
+// Socket handler'larindaki hatalar yakalanmazsa Node sureci duser; hepsini sar.
+function safe(label, handler) {
+  return async (...args) => {
+    try {
+      await handler(...args);
+    } catch (error) {
+      console.error(`[socket] ${label} hatasi:`, error);
+    }
+  };
+}
+
+async function touchLastSeen(userId, force = false) {
+  if (!presenceStore.shouldPersistLastSeen(userId, force)) {
+    return;
+  }
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { lastSeenAt: new Date() },
+  });
+}
+
 async function buildPresencePayload(coupleId) {
-  const couple = await prisma.couple.findUnique({
-    where: {
-      id: coupleId,
-    },
+  const memberships = await prisma.coupleMembership.findMany({
+    where: { coupleId },
+    orderBy: { joinedAt: "asc" },
     include: {
-      memberships: {
-        orderBy: {
-          joinedAt: "asc",
-        },
-        include: {
-          user: {
-            select: socketUserSelect,
-          },
-        },
+      user: {
+        select: publicUserSelect,
       },
     },
   });
@@ -57,13 +65,17 @@ async function buildPresencePayload(coupleId) {
   return {
     coupleId,
     typingUserIds: presenceStore.getTypingUserIds(coupleId),
-    users: (couple?.memberships ?? []).map((membership) => serializeUser(membership.user, presenceStore)),
+    users: memberships.map((membership) => serializeUser(membership.user, presenceStore)),
     emittedAt: new Date().toISOString(),
   };
 }
 
 export async function emitPresenceUpdate(io, coupleId) {
-  io.to(roomName(coupleId)).emit("presence:update", await buildPresencePayload(coupleId));
+  if (!io || !coupleId) {
+    return;
+  }
+
+  io.to(coupleRoom(coupleId)).emit("presence:update", await buildPresencePayload(coupleId));
 }
 
 export function emitDeliveryUpdate(io, coupleId, receipts) {
@@ -71,7 +83,7 @@ export function emitDeliveryUpdate(io, coupleId, receipts) {
     return;
   }
 
-  io.to(roomName(coupleId)).emit("messages:delivered", {
+  io.to(coupleRoom(coupleId)).emit("messages:delivered", {
     coupleId,
     receipts: receipts.map((item) => ({
       messageId: item.id,
@@ -86,7 +98,7 @@ export function emitReadUpdate(io, coupleId, receipts) {
     return;
   }
 
-  io.to(roomName(coupleId)).emit("messages:read", {
+  io.to(coupleRoom(coupleId)).emit("messages:read", {
     coupleId,
     receipts: receipts.map((item) => ({
       messageId: item.id,
@@ -102,7 +114,7 @@ export function emitNewMessage(io, coupleId, message) {
     return;
   }
 
-  io.to(roomName(coupleId)).emit("message:new", {
+  io.to(coupleRoom(coupleId)).emit("message:new", {
     coupleId,
     message: serializeMessage(message),
     emittedAt: new Date().toISOString(),
@@ -114,7 +126,7 @@ export function emitDeletedMessage(io, coupleId, messageId, deletedAt) {
     return;
   }
 
-  io.to(roomName(coupleId)).emit("message:deleted", {
+  io.to(coupleRoom(coupleId)).emit("message:deleted", {
     coupleId,
     messageId,
     deletedAt: deletedAt.toISOString(),
@@ -127,7 +139,7 @@ export function emitCollectionUpsert(io, coupleId, collectionName, item) {
     return;
   }
 
-  io.to(roomName(coupleId)).emit("data:collection-upsert", {
+  io.to(coupleRoom(coupleId)).emit("data:collection-upsert", {
     coupleId,
     collectionName,
     item,
@@ -140,7 +152,7 @@ export function emitCollectionDelete(io, coupleId, collectionName, itemId) {
     return;
   }
 
-  io.to(roomName(coupleId)).emit("data:collection-delete", {
+  io.to(coupleRoom(coupleId)).emit("data:collection-delete", {
     coupleId,
     collectionName,
     itemId,
@@ -153,7 +165,7 @@ export function emitDocumentUpdate(io, coupleId, documentKey, document) {
     return;
   }
 
-  io.to(roomName(coupleId)).emit("data:document-update", {
+  io.to(coupleRoom(coupleId)).emit("data:document-update", {
     coupleId,
     documentKey,
     document,
@@ -166,11 +178,54 @@ export function emitDocumentDelete(io, coupleId, documentKey) {
     return;
   }
 
-  io.to(roomName(coupleId)).emit("data:document-delete", {
+  io.to(coupleRoom(coupleId)).emit("data:document-delete", {
     coupleId,
     documentKey,
     emittedAt: new Date().toISOString(),
   });
+}
+
+export function emitToUser(io, userId, event, payload = {}) {
+  if (!io) {
+    return;
+  }
+
+  io.to(userRoom(userId)).emit(event, {
+    ...payload,
+    emittedAt: new Date().toISOString(),
+  });
+}
+
+// Eslesme olustugunda kullanicinin acik tum soketlerini cift odasina tasir;
+// boylece uygulamayi yeniden baslatmadan mesajlasma aninda calisir.
+export async function attachUserToCouple(io, userId, coupleId) {
+  if (!io) {
+    return;
+  }
+
+  const sockets = await io.in(userRoom(userId)).fetchSockets();
+
+  for (const socket of sockets) {
+    socket.join(coupleRoom(coupleId));
+    socket.data.coupleId = coupleId;
+  }
+
+  presenceStore.setCouple(userId, coupleId);
+}
+
+export async function detachUserFromCouple(io, userId, coupleId) {
+  if (!io) {
+    return;
+  }
+
+  const sockets = await io.in(userRoom(userId)).fetchSockets();
+
+  for (const socket of sockets) {
+    socket.leave(coupleRoom(coupleId));
+    socket.data.coupleId = null;
+  }
+
+  presenceStore.setCouple(userId, null);
 }
 
 export function registerSocketHandlers(io) {
@@ -187,89 +242,90 @@ export function registerSocketHandlers(io) {
         where: {
           id: String(payload.sub),
         },
-        select: socketUserSelect,
+        select: {
+          id: true,
+          membership: {
+            select: { coupleId: true },
+          },
+        },
       });
 
       if (!user) {
         return next(new Error("UNAUTHORIZED"));
       }
 
-      const membership = await loadMembershipForUser(user.id);
-
-      if (!membership) {
-        return next(new Error("NO_COUPLE"));
-      }
-
+      // Eslesmemis kullanicilar da baglanir: eslesme istekleri bu soketten gelir.
       socket.data.userId = user.id;
-      socket.data.coupleId = membership.coupleId;
+      socket.data.coupleId = user.membership?.coupleId ?? null;
       next();
     } catch (_error) {
       next(new Error("UNAUTHORIZED"));
     }
   });
 
-  io.on("connection", async (socket) => {
-    const userId = socket.data.userId;
-    const coupleId = socket.data.coupleId;
-    const now = new Date();
+  io.on(
+    "connection",
+    safe("connection", async (socket) => {
+      const userId = socket.data.userId;
 
-    socket.join(roomName(coupleId));
-    presenceStore.connect(userId, socket.id, coupleId);
+      socket.join(userRoom(userId));
+      presenceStore.connect(userId, socket.id, socket.data.coupleId);
 
-    await prisma.user.update({
-      where: {
-        id: userId,
-      },
-      data: {
-        lastSeenAt: now,
-      },
-    });
+      socket.on(
+        "presence:heartbeat",
+        safe("heartbeat", async () => {
+          await touchLastSeen(userId);
+        }),
+      );
 
-    const deliveries = await markMessagesDelivered(coupleId, userId);
-    emitDeliveryUpdate(io, coupleId, deliveries);
-    await emitPresenceUpdate(io, coupleId);
+      // Yaziyor bilgisi sadece hafizada tutulur, DB'ye yazilmaz.
+      socket.on(
+        "typing:update",
+        safe("typing", async (payload = {}) => {
+          const coupleId = socket.data.coupleId;
 
-    socket.on("presence:heartbeat", async () => {
-      await prisma.user.update({
-        where: {
-          id: userId,
-        },
-        data: {
-          lastSeenAt: new Date(),
-        },
-      });
+          if (!coupleId) {
+            return;
+          }
 
-      await emitPresenceUpdate(io, coupleId);
-    });
+          const isTyping = Boolean(payload?.isTyping);
+          presenceStore.setTyping(userId, isTyping);
+          socket.to(coupleRoom(coupleId)).emit("typing:update", {
+            coupleId,
+            userId,
+            isTyping,
+            emittedAt: new Date().toISOString(),
+          });
+        }),
+      );
 
-    socket.on("typing:update", async (payload = {}) => {
-      presenceStore.setTyping(userId, coupleId, Boolean(payload.isTyping));
+      socket.on(
+        "disconnect",
+        safe("disconnect", async () => {
+          const coupleId = socket.data.coupleId;
+          const wentOffline = presenceStore.disconnect(userId, socket.id);
 
-      await prisma.user.update({
-        where: {
-          id: userId,
-        },
-        data: {
-          lastSeenAt: new Date(),
-        },
-      });
+          if (!wentOffline) {
+            return;
+          }
 
-      await emitPresenceUpdate(io, coupleId);
-    });
+          await touchLastSeen(userId, true);
+          await emitPresenceUpdate(io, coupleId);
+        }),
+      );
 
-    socket.on("disconnect", async () => {
-      presenceStore.disconnect(userId, socket.id);
+      if (socket.data.coupleId) {
+        const coupleId = socket.data.coupleId;
+        socket.join(coupleRoom(coupleId));
 
-      await prisma.user.update({
-        where: {
-          id: userId,
-        },
-        data: {
-          lastSeenAt: new Date(),
-        },
-      });
+        const deliveries = await markMessagesDelivered(coupleId, userId);
+        emitDeliveryUpdate(io, coupleId, deliveries);
+        await touchLastSeen(userId, true);
+        await emitPresenceUpdate(io, coupleId);
+        return;
+      }
 
-      await emitPresenceUpdate(io, coupleId);
-    });
-  });
+      await touchLastSeen(userId, true);
+    }),
+  );
 }

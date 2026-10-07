@@ -11,18 +11,21 @@ function generateInviteCode() {
   return randomBytes(4).toString("hex").toUpperCase();
 }
 
-async function upsertDemoUser({ email, password, displayName }) {
+async function upsertDemoUser({ email, username, password, displayName }) {
   const normalizedEmail = email.trim().toLowerCase();
+  const normalizedUsername = username.trim().toLowerCase();
   const passwordHash = await bcrypt.hash(password, 12);
 
   return prisma.user.upsert({
     where: { email: normalizedEmail },
     update: {
+      username: normalizedUsername,
       displayName,
       passwordHash,
     },
     create: {
       email: normalizedEmail,
+      username: normalizedUsername,
       displayName,
       passwordHash,
     },
@@ -38,15 +41,17 @@ async function main() {
   const demoUsers = [
     {
       email: process.env.DEMO_USER_1_EMAIL,
+      username: process.env.DEMO_USER_1_USERNAME,
       password: process.env.DEMO_USER_1_PASSWORD,
       displayName: process.env.DEMO_USER_1_NAME,
     },
     {
       email: process.env.DEMO_USER_2_EMAIL,
+      username: process.env.DEMO_USER_2_USERNAME,
       password: process.env.DEMO_USER_2_PASSWORD,
       displayName: process.env.DEMO_USER_2_NAME,
     },
-  ].filter((item) => item.email && item.password && item.displayName);
+  ].filter((item) => item.email && item.username && item.password && item.displayName);
 
   if (demoUsers.length === 0) {
     console.log("Demo kullanicilari tanimli degil, seed atlandi.");

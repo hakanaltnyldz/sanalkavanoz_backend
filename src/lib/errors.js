@@ -18,9 +18,13 @@ export function notFoundHandler(_req, _res, next) {
 
 export function errorHandler(error, _req, res, _next) {
   if (error instanceof ZodError) {
+    const firstIssue = error.issues[0];
+
     return res.status(400).json({
       error: "ValidationError",
-      message: "Gonderilen veri gecersiz.",
+      message: firstIssue?.message && !firstIssue.message.startsWith("Invalid")
+        ? firstIssue.message
+        : "Gonderilen veri gecersiz.",
       details: error.flatten(),
     });
   }
@@ -33,10 +37,34 @@ export function errorHandler(error, _req, res, _next) {
     });
   }
 
-  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-    return res.status(409).json({
-      error: "ConflictError",
-      message: "Ayni anahtar ile kayit zaten mevcut.",
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === "P2002") {
+      return res.status(409).json({
+        error: "ConflictError",
+        message: "Ayni anahtar ile kayit zaten mevcut.",
+      });
+    }
+
+    if (error.code === "P2025") {
+      return res.status(404).json({
+        error: "NotFoundError",
+        message: "Kayit bulunamadi.",
+      });
+    }
+  }
+
+  // express.json / express.raw hatalari (bozuk JSON, cok buyuk dosya).
+  if (error?.type === "entity.parse.failed") {
+    return res.status(400).json({
+      error: "ValidationError",
+      message: "Gonderilen JSON okunamadi.",
+    });
+  }
+
+  if (error?.type === "entity.too.large") {
+    return res.status(413).json({
+      error: "PayloadTooLarge",
+      message: "Dosya cok buyuk.",
     });
   }
 

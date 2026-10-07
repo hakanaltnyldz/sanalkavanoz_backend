@@ -1,6 +1,6 @@
 {
   "name": "sanalkavanoz-backend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -10,9 +10,10 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "prisma:generate": "prisma generate",
-    "prisma:push": "prisma db push",
+    "prisma:push": "prisma db execute --file prisma/pre-push.sql --schema prisma/schema.prisma && prisma db push --skip-generate",
     "prisma:seed": "node prisma/seed.mjs",
-    "prisma:validate": "prisma validate"
+    "prisma:validate": "prisma validate",
+    "test": "node test/run-e2e.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -21,6 +22,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.1.0",
+    "firebase-admin": "^14.5.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.10.1",
@@ -28,6 +30,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "prisma": "^6.19.3"
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-socket": "^0.2.11",
+    "prisma": "^6.19.3",
+    "socket.io-client": "^4.8.4"
   }
 }

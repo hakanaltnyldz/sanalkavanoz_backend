@@ -70,15 +70,19 @@ export async function upsertCollectionItem({
   replace = false,
 }) {
   const resolvedItemKey = itemKey?.trim() || randomUUID();
-  const existing = await prisma.coupleCollectionItem.findUnique({
-    where: {
-      coupleId_collectionName_itemKey: {
-        coupleId,
-        collectionName,
-        itemKey: resolvedItemKey,
-      },
-    },
-  });
+  // Tam yazmada (replace) mevcut kaydi okumaya gerek yok; bir sorgu tasarrufu.
+  const existing =
+    replace || !itemKey
+      ? null
+      : await prisma.coupleCollectionItem.findUnique({
+          where: {
+            coupleId_collectionName_itemKey: {
+              coupleId,
+              collectionName,
+              itemKey: resolvedItemKey,
+            },
+          },
+        });
 
   const nextData = replace
     ? sanitizeRecord(data)
@@ -107,13 +111,12 @@ export async function upsertCollectionItem({
 }
 
 export async function deleteCollectionItem({ coupleId, collectionName, itemKey }) {
-  await prisma.coupleCollectionItem.delete({
+  // Zaten silinmis bir kayit icin hata atma; iki cihaz ayni anda silebilir.
+  await prisma.coupleCollectionItem.deleteMany({
     where: {
-      coupleId_collectionName_itemKey: {
-        coupleId,
-        collectionName,
-        itemKey,
-      },
+      coupleId,
+      collectionName,
+      itemKey,
     },
   });
 }
@@ -137,14 +140,16 @@ export async function upsertSharedDocument({
   data,
   replace = false,
 }) {
-  const existing = await prisma.coupleSharedDocument.findUnique({
-    where: {
-      coupleId_documentKey: {
-        coupleId,
-        documentKey,
-      },
-    },
-  });
+  const existing = replace
+    ? null
+    : await prisma.coupleSharedDocument.findUnique({
+        where: {
+          coupleId_documentKey: {
+            coupleId,
+            documentKey,
+          },
+        },
+      });
 
   const nextData = replace
     ? sanitizeRecord(data)
@@ -171,12 +176,10 @@ export async function upsertSharedDocument({
 }
 
 export async function deleteSharedDocument({ coupleId, documentKey }) {
-  await prisma.coupleSharedDocument.delete({
+  await prisma.coupleSharedDocument.deleteMany({
     where: {
-      coupleId_documentKey: {
-        coupleId,
-        documentKey,
-      },
+      coupleId,
+      documentKey,
     },
   });
 }
